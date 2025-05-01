@@ -17,7 +17,7 @@ except ImportError:
     class ChatMessage(BaseModel):
         question: str
 
-CHROMA_PATH = "./db_metadata_v5"
+CHROMA_PATH = "../db_metadata_v5"
 
 
 def initialize_rag():
@@ -43,6 +43,7 @@ def initialize_rag():
                     [INST]You are a sales manager with the name 'AI Assistant'. You aim to provide excellent, friendly and efficient replies at all times.
                     You will provide me with answers from the given info.
                     If the answer is not included, say exactly "Hmm, I am not sure. Let me check and get back to you."
+                    You need answer only on russian language.
                     Refuse to answer any question not about the info.
                     Never break character.
                     No funny stuff.
