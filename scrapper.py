@@ -2,8 +2,8 @@ from langchain_community.document_loaders import AsyncHtmlLoader
 from langchain_community.document_transformers import Html2TextTransformer, BeautifulSoupTransformer
 
 
-FILE_TO_PARSE = "data/links.txt"
-DIR_TO_STORE = "docs"
+FILE_TO_PARSE = "data/inputData/links.txt"
+DIR_TO_STORE = "data/docs"
 
 
 def getLinks2Parse() -> list:
