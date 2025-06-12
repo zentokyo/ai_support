@@ -1,20 +1,19 @@
 import os
 import logging
 from typing import Dict, List
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
-    CallbackQueryHandler,
     ContextTypes,
     ConversationHandler,
 )
 from dotenv import load_dotenv
 import json
 from pathlib import Path
-from custom_ollama import initialize_rag, query_rag, ChatMessage
+from custom_gigachat import initialize_rag
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Загрузка переменных окружения
@@ -35,7 +34,8 @@ HISTORY_DIR.mkdir(exist_ok=True)
 MAIN_MENU, CHATTING = range(2)
 
 # Инициализация RAG системы
-db, rag_chat_history, document_chain = initialize_rag()
+db, document_chain = initialize_rag()
+rag_chat_history: Dict[str, List[Dict]] = {}
 
 
 class TelegramChatWrapper:
@@ -62,8 +62,7 @@ class TelegramChatWrapper:
 
     def clear_history(self):
         self.history = []
-        if str(self.user_id) in rag_chat_history:
-            rag_chat_history[str(self.user_id)] = []
+        rag_chat_history[str(self.user_id)] = []
         self.save_history()
 
     def get_langchain_messages(self):
@@ -101,8 +100,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_message = (
         f"Привет, {user.first_name}! 👋\n\n"
-        "Я - ваш персональный юридический ассистент. Я могу помочь вам с вопросами "
-        "по Конституции РФ и действующему законодательству.\n\n"
+        "Я — ваш персональный юридический ассистент. Я помогу вам с вопросами "
+        "по Конституции РФ и законодательству.\n\n"
         "Выберите действие из меню ниже:"
     )
     await update.message.reply_text(welcome_message, reply_markup=main_menu_markup)
@@ -116,8 +115,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📢 Начать консультацию — задать вопрос по законодательству\n"
         "🧹 Очистить чат — удалить историю общения\n"
         "📄 История сообщений — показать последние вопросы и ответы\n"
-        "ℹ️ Помощь — показать это сообщение\n\n"
-        "Просто выберите нужный пункт из меню!"
+        "ℹ️ Помощь — показать это сообщение"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -136,7 +134,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📢 Начать консультацию":
         await update.message.reply_text(
-            "Вы можете задать ваш юридический вопрос. Пожалуйста, формулируйте вопросы четко и полно.\n\n"
+            "Задайте ваш юридический вопрос.\n\n"
             "Примеры:\n• Какие права гарантирует статья 15 Конституции РФ?\n"
             "• Как регулируется право на образование в РФ?"
         )
@@ -169,22 +167,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_wrapper.add_message("user", user_message)
 
     try:
-        message = ChatMessage(question=user_message)
-        history_messages = chat_wrapper.get_langchain_messages()[:-1]
+        # Вызов RAG с документацией
+        rag_chat_history.setdefault(str(user_id), [])
+        history = chat_wrapper.get_langchain_messages()
 
-        response = query_rag(
-            db=db,
-            chat_history=rag_chat_history,
-            document_chain=document_chain,
-            message=message,
-            session_id=str(user_id)
-        )
+        results = db.similarity_search(user_message, k=3)
+        inputs = {
+            "question": user_message,
+            "context": results,
+            "chat_history": history
+        }
+
+        response = document_chain.invoke(inputs)
 
         chat_wrapper.add_message("assistant", response)
         await update.message.reply_text(response)
 
     except Exception as e:
-        logger.error(f"Error in RAG system: {e}")
+        logger.error(f"Ошибка в RAG: {e}")
         await update.message.reply_text(
             "Произошла ошибка при обработке запроса. Попробуйте снова позже."
         )
