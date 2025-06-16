@@ -21,7 +21,8 @@ load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,11 @@ MAIN_MENU, CHATTING = range(2)
 
 # Инициализация RAG системы
 db, document_chain = initialize_rag()
-rag_chat_history: Dict[str, List[Dict]] = {}
 
 
 class TelegramChatWrapper:
+    """Класс для управления историей диалогов пользователя"""
+
     def __init__(self, user_id: int):
         self.user_id = user_id
         self.history_file = HISTORY_DIR / f"{user_id}.json"
@@ -46,26 +48,42 @@ class TelegramChatWrapper:
         self.load_history()
 
     def load_history(self):
+        """Загрузка истории из файла"""
         if self.history_file.exists():
-            with open(self.history_file, "r", encoding="utf-8") as f:
-                self.history = json.load(f)
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    self.history = json.load(f)
+            except Exception as e:
+                logger.error(f"Ошибка загрузки истории: {e}")
+                self.history = []
         else:
             self.history = []
 
     def save_history(self):
-        with open(self.history_file, "w", encoding="utf-8") as f:
-            json.dump(self.history, f, ensure_ascii=False, indent=2)
+        """Сохранение истории в файл"""
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(self.history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения истории: {e}")
 
     def add_message(self, role: str, content: str):
+        """Добавление сообщения в историю"""
         self.history.append({"role": role, "content": content})
         self.save_history()
 
     def clear_history(self):
+        """Очистка истории диалога"""
         self.history = []
-        rag_chat_history[str(self.user_id)] = []
-        self.save_history()
+        if self.history_file.exists():
+            try:
+                self.history_file.unlink()
+            except Exception as e:
+                logger.error(f"Ошибка удаления файла истории: {e}")
+        logger.info(f"История очищена для пользователя {self.user_id}")
 
     def get_langchain_messages(self):
+        """Преобразование истории в формат LangChain"""
         messages = []
         for msg in self.history[-10:]:
             if msg["role"] == "user":
@@ -74,19 +92,12 @@ class TelegramChatWrapper:
                 messages.append(AIMessage(content=msg["content"]))
         return messages
 
-    def get_recent_messages(self, count=5) -> str:
-        if not self.history:
-            return "История сообщений пуста."
-        recent = self.history[-count * 2:]
-        return "\n\n".join(
-            f"👤 Вы: {recent[i]['content']}\n🤖 Бот: {recent[i + 1]['content']}"
-            for i in range(0, len(recent) - 1, 2)
-        )
 
-
+# Клавиатура главного меню
 main_menu_keyboard = [
-    ["📢 Начать консультацию", "🧹 Очистить чат"],
-    ["📄 История сообщений", "ℹ️ Помощь"]
+    ["📢 Начать консультацию"],
+    ["🧹 Завершить консультацию"],
+    ["ℹ️ Помощь"]
 ]
 
 main_menu_markup = ReplyKeyboardMarkup(
@@ -95,131 +106,213 @@ main_menu_markup = ReplyKeyboardMarkup(
     one_time_keyboard=False
 )
 
+# Клавиатура во время консультации
+consultation_keyboard = [
+    ["🧹 Завершить консультацию"],
+    ["↩️ Вернуться в меню"]
+]
+
+consultation_markup = ReplyKeyboardMarkup(
+    keyboard=consultation_keyboard,
+    resize_keyboard=True,
+    one_time_keyboard=False
+)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
     user = update.effective_user
     welcome_message = (
-        f"Привет, {user.first_name}! 👋\n\n"
-        "Я — ваш персональный юридический ассистент. Я помогу вам с вопросами "
-        "по Конституции РФ и законодательству.\n\n"
-        "Выберите действие из меню ниже:"
+        f"👋 Приветствую, {user.first_name}!\n\n"
+        "Я ваш персональный юридический ассистент.\n"
+        "Могу помочь с вопросами по законодательству РФ:\n"
+        "- Гражданский кодекс\n"
+        "- Закон о защите прав потребителей\n"
+        "- Воздушный кодекс\n"
+        "- Обязательное страхование\n\n"
+        "Выберите действие:"
     )
     await update.message.reply_text(welcome_message, reply_markup=main_menu_markup)
     return MAIN_MENU
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
     help_text = (
-        "📌 *Помощь*\n\n"
-        "Вы можете воспользоваться следующими функциями:\n"
-        "📢 Начать консультацию — задать вопрос по законодательству\n"
-        "🧹 Очистить чат — удалить историю общения\n"
-        "📄 История сообщений — показать последние вопросы и ответы\n"
-        "ℹ️ Помощь — показать это сообщение"
+        "📚 *Помощь по использованию бота*\n\n"
+        "✅ *Начать консультацию* - задайте юридический вопрос\n"
+        "🧹 *Завершить консультацию* - очистить историю диалога\n"
+        "↩️ *Вернуться в меню* - прервать консультацию\n\n"
+        "Примеры вопросов:\n"
+        "• Какие права у потребителя при возврате товара?\n"
+        "• Как регулируется страхование ОСАГО?\n"
+        "• Каковы обязанности авиаперевозчика?\n\n"
+        "⚠️ *Важно:* Я отвечаю только на юридические вопросы!"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
-async def clear_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_history = TelegramChatWrapper(user_id)
-    chat_history.clear_history()
-    await update.message.reply_text("История диалога очищена.")
+async def begin_consultation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик начала консультации"""
+    await update.message.reply_text(
+        "💼 Вы в режиме консультации. Задайте ваш юридический вопрос.\n\n"
+        "Я отвечу на основе:\n"
+        "- Гражданского кодекса РФ\n"
+        "- Закона о защите прав потребителей\n"
+        "- Воздушного кодекса РФ\n"
+        "- ФЗ об обязательном страховании\n\n"
+        "Для очистки истории нажмите 'Завершить консультацию'",
+        reply_markup=consultation_markup
+    )
+    return CHATTING
 
 
-async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def end_consultation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик завершения консультации"""
     user_id = update.effective_user.id
     chat_wrapper = TelegramChatWrapper(user_id)
+    chat_wrapper.clear_history()
 
-    if text == "📢 Начать консультацию":
-        await update.message.reply_text(
-            "Задайте ваш юридический вопрос.\n\n"
-            "Примеры:\n• Какие права гарантирует статья 15 Конституции РФ?\n"
-            "• Как регулируется право на образование в РФ?"
-        )
-        return CHATTING
-
-    elif text == "🧹 Очистить чат":
-        chat_wrapper.clear_history()
-        await update.message.reply_text("История диалога очищена.")
-        return MAIN_MENU
-
-    elif text == "📄 История сообщений":
-        recent = chat_wrapper.get_recent_messages()
-        await update.message.reply_text(recent)
-        return MAIN_MENU
-
-    elif text == "ℹ️ Помощь":
-        await help_command(update, context)
-        return MAIN_MENU
-
-    else:
-        await update.message.reply_text("Пожалуйста, выберите действие из меню.")
-        return MAIN_MENU
+    await update.message.reply_text(
+        "🧹 История диалога очищена. Вы можете начать новую консультацию.",
+        reply_markup=main_menu_markup
+    )
+    return MAIN_MENU
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик сообщений пользователя в режиме консультации"""
     user_id = update.effective_user.id
     user_message = update.message.text
 
+    # Если пользователь хочет вернуться в меню
+    if user_message == "↩️ Вернуться в меню":
+        await update.message.reply_text(
+            "Возвращаемся в главное меню.",
+            reply_markup=main_menu_markup
+        )
+        return MAIN_MENU
+
+    # Создаем обертку для истории
     chat_wrapper = TelegramChatWrapper(user_id)
     chat_wrapper.add_message("user", user_message)
 
     try:
-        # Вызов RAG с документацией
-        rag_chat_history.setdefault(str(user_id), [])
+        # Показываем индикатор набора сообщения
+        await update.message.reply_chat_action(action="typing")
+
+        # Получаем историю в формате LangChain
         history = chat_wrapper.get_langchain_messages()
 
+        # Поиск релевантных документов
         results = db.similarity_search(user_message, k=3)
+
+        # Формируем входные данные для RAG
         inputs = {
             "question": user_message,
             "context": results,
             "chat_history": history
         }
 
+        # Получаем ответ от RAG
         response = document_chain.invoke(inputs)
 
+        # Сохраняем ответ в историю
         chat_wrapper.add_message("assistant", response)
+
+        # Отправляем ответ пользователю
         await update.message.reply_text(response)
 
     except Exception as e:
-        logger.error(f"Ошибка в RAG: {e}")
+        logger.error(f"Ошибка обработки запроса: {e}")
         await update.message.reply_text(
-            "Произошла ошибка при обработке запроса. Попробуйте снова позже."
+            "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте задать вопрос иначе."
         )
 
     return CHATTING
 
 
+async def handle_unexpected_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик непредвиденных сообщений вне консультации"""
+    response = (
+        "ℹ️ Я вас не понял. Пожалуйста, используйте кнопки меню для навигации.\n\n"
+        "Если вы хотите задать юридический вопрос, нажмите '📢 Начать консультацию'."
+    )
+    await update.message.reply_text(response, reply_markup=main_menu_markup)
+    return MAIN_MENU
+
+
+async def handle_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик медиа-файлов (фото, видео, документы)"""
+    response = (
+        "⚠️ Я работаю только с текстовыми сообщениями.\n\n"
+        "Пожалуйста, задайте ваш вопрос текстом или используйте кнопки меню."
+    )
+    await update.message.reply_text(response, reply_markup=main_menu_markup)
+    return MAIN_MENU
+
+
+async def handle_consultation_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик медиа-файлов во время консультации"""
+    response = (
+        "⚠️ Я могу анализировать только текстовые юридические вопросы.\n\n"
+        "Пожалуйста, опишите ваш вопрос текстом или используйте кнопки управления консультацией."
+    )
+    await update.message.reply_text(response, reply_markup=consultation_markup)
+    return CHATTING
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена текущей операции"""
     await update.message.reply_text(
-        "Консультация завершена. Нажмите /start чтобы начать заново.",
+        "Действие отменено. Используйте меню для навигации.",
         reply_markup=main_menu_markup
     )
-    return ConversationHandler.END
+    return MAIN_MENU
 
 
 def main():
+    """Основная функция запуска бота"""
+    # Создаем приложение
     application = Application.builder().token(TOKEN).build()
 
+    # Настройка ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            MAIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
+            MAIN_MENU: [
+                MessageHandler(filters.Regex("^📢 Начать консультацию$"), begin_consultation),
+                MessageHandler(filters.Regex("^ℹ️ Помощь$"), help_command),
+                MessageHandler(filters.Regex("^🧹 Завершить консультацию$"), end_consultation),
+
+                # Обработчик непредвиденных текстовых сообщений в главном меню
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_input),
+
+                # Обработчик медиа-сообщений в главном меню
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_media_input),
+            ],
             CHATTING: [
+                MessageHandler(filters.Regex("^🧹 Завершить консультацию$"), end_consultation),
+                MessageHandler(filters.Regex("^↩️ Вернуться в меню$"), cancel),
+
+                # Обработчик текстовых сообщений в режиме консультации
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
-                CommandHandler("clear", clear_history_command),
+
+                # Обработчик медиа-сообщений в режиме консультации
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_consultation_media),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # Регистрируем обработчики
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("clear", clear_history_command))
+    application.add_handler(CommandHandler("start", start))
 
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запускаем бота
+    logger.info("Бот запущен...")
+    application.run_polling()
 
 
 if __name__ == "__main__":

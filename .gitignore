@@ -1,6 +1,5 @@
 db_metadata_v5/
-
-
+chat_histories/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
